@@ -2,18 +2,22 @@
 # ---------------------------------------------------------------------------
 # 就业指南 Wiki · 服务器更新脚本
 #
-#   用法：  ./update.sh            拉取 + 发布
+#   用法：  ./update.sh            拉取 + 发布（wiki + 首页）
 #           ./update.sh --build    拉取 + 本地重新构建 + 发布
 #           ./update.sh --no-pull  只发布，不拉取
 #
-#   目标目录：$WEB_ROOT（默认 /var/www/index/zywiki）
+#   发布目标：
+#     wiki  -> ${WEB_ROOT:-/var/www/index/zywiki}
+#     首页  -> ${PORTAL_ROOT:-/var/www/index}（跳过 zywiki 子目录）
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WEB_ROOT="${WEB_ROOT:-/var/www/index/zywiki}"
+PORTAL_ROOT="${PORTAL_ROOT:-/var/www/index}"
 WEB_OWNER="${WEB_OWNER:-www-data:www-data}"
 SRC_DIR="$APP_DIR/dist"
+PORTAL_SRC="$APP_DIR/portal"
 BRANCH="${BRANCH:-main}"
 
 PULL=1
@@ -30,7 +34,7 @@ for arg in "$@"; do
   esac
 done
 
-say() { printf '\033[1;34m[wiki]\033[0m %s\n' "$*"; }
+say()  { printf '\033[1;34m[wiki]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[wiki]\033[0m %s\n' "$*" >&2; exit 1; }
 
 cd "$APP_DIR"
@@ -68,32 +72,64 @@ if [ "$BUILD" = "1" ]; then
 fi
 
 [ -f "$SRC_DIR/index.html" ] || fail "找不到 $SRC_DIR/index.html，无法发布"
+[ -f "$PORTAL_SRC/index.html" ] || fail "找不到 $PORTAL_SRC/index.html，无法发布"
 
-# --- 3. 发布 ---------------------------------------------------------------
-install -d -m 0755 "$WEB_ROOT"
+# --- 3. 同步工具 -----------------------------------------------------------
+# 用 rsync 时把权限固定为目录 755 / 文件 644
+publish_mirror() {           # 目标目录完全镜像源目录（会删除多余文件）
+  local src="$1" dest="$2" extra="${3:-}"
+  install -d -m 0755 "$dest"
+  if command -v rsync >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    rsync -a --delete --chmod=D755,F644 ${extra} "$src"/ "$dest"/
+  else
+    find "$dest" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    cp -R "$src"/. "$dest"/
+    find "$dest" -type d -exec chmod 755 {} +
+    find "$dest" -type f -exec chmod 644 {} +
+  fi
+}
 
-if command -v rsync >/dev/null 2>&1; then
-  rsync -a --delete --chmod=D755,F644 "$SRC_DIR"/ "$WEB_ROOT"/
+publish_merge() {            # 只覆盖同名文件，不删除目标里已有的东西
+  local src="$1" dest="$2"
+  install -d -m 0755 "$dest"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --chmod=D755,F644 "$src"/ "$dest"/
+  else
+    cp -R "$src"/. "$dest"/
+    find "$dest" -maxdepth 1 -type f -exec chmod 644 {} +
+  fi
+}
+
+# --- 4. 发布 wiki ----------------------------------------------------------
+publish_mirror "$SRC_DIR" "$WEB_ROOT"
+say "wiki  -> $WEB_ROOT"
+
+# --- 5. 发布首页（只覆盖，不删除；zywiki 子目录自然保留） -------------------
+if [ "$PORTAL_ROOT" != "$WEB_ROOT" ]; then
+  publish_merge "$PORTAL_SRC" "$PORTAL_ROOT"
+  say "首页  -> $PORTAL_ROOT"
 else
-  find "$WEB_ROOT" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-  cp -R "$SRC_DIR"/. "$WEB_ROOT"/
-  find "$WEB_ROOT" -type d -exec chmod 755 {} +
-  find "$WEB_ROOT" -type f -exec chmod 644 {} +
+  say "跳过首页：PORTAL_ROOT 与 WEB_ROOT 相同"
 fi
 
 if [ "$(id -u)" = "0" ]; then
   chown -R "$WEB_OWNER" "$WEB_ROOT" 2>/dev/null || true
+  if [ "$PORTAL_ROOT" != "$WEB_ROOT" ]; then
+    chown "$WEB_OWNER" "$PORTAL_ROOT"/index.html 2>/dev/null || true
+  fi
 fi
 
-# --- 4. 自检 ---------------------------------------------------------------
+# --- 6. 自检 ---------------------------------------------------------------
 if command -v nginx >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
   if systemctl is-active --quiet nginx; then
     nginx -t >/dev/null 2>&1 || say "提示：nginx 配置检查未通过（与本站无关时请单独排查）"
   fi
 fi
 
-count="$(find "$WEB_ROOT" -type f | wc -l | tr -d ' ')"
-say "发布完成：$count 个文件 -> $WEB_ROOT"
+wiki_files="$(find "$WEB_ROOT" -type f | wc -l | tr -d ' ')"
+portal_files="$(find "$PORTAL_ROOT" -maxdepth 1 -type f | wc -l | tr -d ' ')"
+say "发布完成：wiki ${wiki_files} 个文件，首页 ${portal_files} 个文件"
 say "访问：http://$(hostname -I 2>/dev/null | awk '{print $1}'):80/zywiki/"
 
 if command -v git >/dev/null 2>&1 && [ -d "$APP_DIR/.git" ]; then
