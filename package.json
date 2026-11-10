@@ -1,0 +1,11 @@
+{
+  "name": "zywiki",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "大学实用就业指南 · 静态 wiki",
+  "scripts": {
+    "build": "node src/build.mjs",
+    "serve": "node src/serve.mjs"
+  }
+}
