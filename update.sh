@@ -40,7 +40,15 @@ if [ "$PULL" = "1" ]; then
   if [ -d "$APP_DIR/.git" ]; then
     before="$(git rev-parse --short HEAD 2>/dev/null || echo none)"
     say "git pull（当前 ${before}）"
-    git -c core.quotepath=false pull --ff-only origin "$BRANCH"
+    if ! git -c core.quotepath=false pull --ff-only origin "$BRANCH"; then
+      # 国内服务器直连 github.com 常常超时，回退到镜像代理再试一次
+      MIRROR="${MIRROR:-https://gh-proxy.com}"
+      say "直连失败，改用镜像 ${MIRROR} 重试"
+      git -c core.quotepath=false \
+          -c url."${MIRROR}/https://github.com/".insteadOf="https://github.com/" \
+          pull --ff-only origin "$BRANCH" \
+        || fail "拉取失败：请检查网络或设置 MIRROR 环境变量"
+    fi
     after="$(git rev-parse --short HEAD)"
     if [ "$before" = "$after" ]; then
       say "已是最新：${after}"
