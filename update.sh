@@ -22,10 +22,12 @@ BRANCH="${BRANCH:-main}"
 
 PULL=1
 BUILD=0
+NGINX=0
 for arg in "$@"; do
   case "$arg" in
     --no-pull) PULL=0 ;;
     --build)   BUILD=1 ;;
+    --nginx)   NGINX=1 ;;
     -h|--help)
       grep -E '^#( |$)' "$0" | sed -E 's/^# ?//' | head -n 20
       exit 0
@@ -120,7 +122,30 @@ if [ "$(id -u)" = "0" ]; then
   fi
 fi
 
-# --- 6. 自检 ---------------------------------------------------------------
+# --- 6. 可选：同步 nginx 配置（配置也放在仓库里，别在服务器上手改） ---------
+if [ "$NGINX" = "1" ]; then
+  [ "$(id -u)" = "0" ] || fail "--nginx 需要 root"
+  [ -d "$APP_DIR/deploy/nginx" ] || fail "找不到 deploy/nginx/"
+  ts="$(date +%Y%m%d-%H%M%S)"
+  for f in "$APP_DIR"/deploy/nginx/*.conf; do
+    name="$(basename "$f")"
+    if [ -f "/etc/nginx/sites-available/$name" ] && ! cmp -s "$f" "/etc/nginx/sites-available/$name"; then
+      cp -a "/etc/nginx/sites-available/$name" "/root/${name}.bak-${ts}"
+      say "备份旧配置：/root/${name}.bak-${ts}"
+    fi
+    install -m 0644 "$f" "/etc/nginx/sites-available/$name"
+    ln -sfn "/etc/nginx/sites-available/$name" "/etc/nginx/sites-enabled/$name"
+    say "nginx 配置：$name"
+  done
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx && say "nginx 已重载"
+  else
+    nginx -t || true
+    fail "nginx 配置检查未通过，已保留旧配置备份，未重载"
+  fi
+fi
+
+# --- 7. 自检 ---------------------------------------------------------------
 if command -v nginx >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
   if systemctl is-active --quiet nginx; then
     nginx -t >/dev/null 2>&1 || say "提示：nginx 配置检查未通过（与本站无关时请单独排查）"

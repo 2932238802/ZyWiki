@@ -7,7 +7,10 @@
 ## 线上地址
 
 - 服务器：`47.111.175.191`
-- 站点：`http://47.111.175.191/zywiki/`
+- 域名：`https://los-theseus.site/`（入口页） → `https://los-theseus.site/zywiki/`
+- 纯 IP：`http://47.111.175.191/zywiki/`（80 明文，不受域名跳转影响）
+
+> 入口页 `portal/` 也在本仓库里，改首页同样走 git + `update.sh`，不要在服务器上手改。
 
 ## 目录结构
 
@@ -17,13 +20,13 @@ ZyWiki/
 │   ├── content.mjs    # 全部正文（唯一的内容源，改这里）
 │   ├── build.mjs      # 生成 dist/：页面、目录、搜索索引、sitemap
 │   ├── check.mjs      # 结构与链接自检（构建后跑一遍）
+│   ├── shot.mjs       # 无头 Chrome 版面体检（溢出/字号/JS 报错 + 截图）
 │   └── serve.mjs      # 本地预览服务器
-├── public/
-│   ├── assets/site.css
-│   ├── assets/site.js
-│   └── favicon.svg
+├── public/            # 静态资源，原样拷贝进 dist/
+├── portal/            # 域名首页（LosAngelous 入口页），发布到 /var/www/index
+├── deploy/nginx/      # nginx 站点配置，用 update.sh --nginx 同步
 ├── dist/              # 构建产物（已提交，服务器不需要 node）
-└── update.sh          # 服务器端更新脚本：git pull + 发布
+└── update.sh          # 服务器端更新脚本
 ```
 
 `dist/` 是提交进仓库的，所以服务器只装 git 和 rsync 就能发布，不需要 Node。
@@ -98,9 +101,23 @@ cd /opt/ZyWiki && ./update.sh
 | --- | --- |
 | `--no-pull` | 只发布，不拉取 |
 | `--build` | 拉取后在本机重新构建（需要 node） |
+| `--nginx` | 同步 `deploy/nginx/*.conf` 到 sites-available/enabled，改前自动备份，`nginx -t` 通过才重载 |
 | `--help` | 查看用法 |
 
-环境变量：`WEB_ROOT`（默认 `/var/www/index/zywiki`）、`WEB_OWNER`（默认 `www-data:www-data`）、`BRANCH`（默认 `main`）。
+环境变量：`WEB_ROOT`（默认 `/var/www/index/zywiki`）、`PORTAL_ROOT`（默认 `/var/www/index`）、`WEB_OWNER`（默认 `www-data:www-data`）、`BRANCH`（默认 `main`）、`MIRROR`（默认 `https://gh-proxy.com`）。
+
+### HTTPS
+
+证书用 Let's Encrypt（certbot webroot 方式，不接管 nginx 配置），到期自动续期：
+
+```bash
+certbot certonly --webroot -w /var/www/index -d los-theseus.site \
+  --deploy-hook 'systemctl reload nginx'
+```
+
+配置见 `deploy/nginx/index-https.conf`：443 提供站点，域名 80 跳 443，`/.well-known/acme-challenge/` 保留明文供续期；IP 直连仍走 80，避免证书与 IP 不匹配。
+
+**注意**：阿里云安全组需要放行入方向 `443/TCP`，否则外网访问会一直握手失败（服务器本机 443 是通的）。
 
 ## 内容口径
 
